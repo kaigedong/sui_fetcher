@@ -2,8 +2,11 @@ pub mod errors;
 pub mod fetcher;
 pub mod transfer;
 
+use serde::{Deserialize, Serialize};
+
 use crate::transfer::TransferEvent;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TxType {
     Transfer(TransferEvent),
     SelfTransfer(TransferEvent),
@@ -11,6 +14,7 @@ pub enum TxType {
     Unknown,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Swap {
     pub pool: String,
     pub dex: Dex,
@@ -21,6 +25,7 @@ pub struct Swap {
     pub out_token: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Dex {
     Cetus,
     Magma,
@@ -44,7 +49,6 @@ mod tests {
             .with(tracing_subscriber::filter::LevelFilter::INFO)
             .init();
 
-        // tracinglog
         let fetcher = Fetcher::new_mainnet(
             "0x62310ee294108c13f3496ce6895f12f3c2cf3994c74c2911501535e23ccc74ff",
             false,

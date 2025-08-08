@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, bail};
 use bigdecimal::BigDecimal;
 use futures::{future, stream::StreamExt};
-use mini_macro::here;
+use mini_macro::here as h;
 use std::str::FromStr;
 use sui_sdk::{
     SuiClient, SuiClientBuilder,
@@ -22,11 +22,14 @@ pub struct Fetcher {
 
 impl Fetcher {
     pub async fn new_mainnet(who: &str, old_first: bool) -> Result<Self> {
-        let sui_client = SuiClientBuilder::default().build_mainnet().await?;
+        let sui_client = SuiClientBuilder::default()
+            .build_mainnet()
+            .await
+            .context(h!())?;
 
         Ok(Self {
             sui_client,
-            who: SuiAddress::from_str(who).context(here!())?,
+            who: SuiAddress::from_str(who).context(h!())?,
             old_first,
         })
     }
@@ -51,13 +54,11 @@ impl Fetcher {
                 .get_transactions_stream(filter, None, descending_order);
 
         txs.for_each(|tx_resp| {
-            // println!("{:?}", tx_resp);
             Self::log_sui_tx_resp(tx_resp);
             future::ready(())
         })
         .await;
 
-        // for event in events.pull_next() {}
         Ok(())
     }
 
@@ -70,37 +71,37 @@ impl Fetcher {
         Ok(res)
     }
 
+    // TODO: 允许用户自己注册解码代码！
     fn log_sui_tx_resp(tx_resp: SuiTransactionBlockResponse) {
         if Self::is_err(&tx_resp).unwrap() {
             return;
         }
 
-        Self::decode_tx_type(tx_resp.clone()).unwrap();
+        match Self::decode_tx_type(tx_resp.clone()) {
+            Ok(res) => tracing::info!("{}", serde_json::to_string(&res).unwrap()),
+            Err(e) => tracing::error!("Failed to decode tx. Err: {:?}", e),
+        };
     }
 
-    // TODO: 允许用户自己注册解码代码！
     fn decode_tx_type(tx_resp: SuiTransactionBlockResponse) -> Result<TxType> {
-        tracing::info!("{}", tx_resp.timestamp_ms.unwrap());
+        tracing::info!("{}", tx_resp.timestamp_ms.context(h!())?);
 
-        let events = tx_resp.events.as_ref().unwrap();
+        let events = tx_resp.events.as_ref().context(h!())?;
         if events.data.is_empty() {
             let balance_changes = tx_resp.balance_changes.unwrap();
-            let transfer_event = transfer::decode_transfer(balance_changes).context(here!())?;
-
-            println!("#### transfer...");
+            let transfer_event = transfer::decode_transfer(balance_changes).context(h!())?;
 
             if transfer_event.sender.eq(&transfer_event.receiver) {
                 return Ok(TxType::SelfTransfer(transfer_event));
+            } else {
+                return Ok(TxType::Transfer(transfer_event));
             }
-            return Ok(TxType::Transfer(transfer_event));
         }
 
         for event in &events.data {
             if event.type_.to_string()
                 == "0x1eabed72c53feb3805120a081dc15963c204dc8d091542592abaf7a35689b2fb::pool::SwapEvent"
             {
-                println!("CetusSwap");
-
                 let balance_changes = tx_resp.balance_changes.as_ref().unwrap();
 
                 assert!(
@@ -146,8 +147,6 @@ impl Fetcher {
             } else if event.type_.to_string()
                 == "0x3492c874c1e3b3e2984e8c41b589e642d4d0a5d6459e5a9cfc2d52fd7c89c267::events::AssetSwap"
             {
-                println!("BluefinSwap");
-
                 let balance_changes = tx_resp.balance_changes.as_ref().unwrap();
                 assert!(
                     balance_changes.len() == 2,
