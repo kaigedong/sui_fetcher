@@ -328,8 +328,8 @@ mod tests {
     use crate::fetcher::{TransferEvent, decode_transfer};
 
     #[test]
+    #[rustfmt::skip]
     fn test_decode_self_transfer() {
-        #[rustfmt::skip]
         let balance_changes = vec![BalanceChange {
             owner: Owner::AddressOwner(SuiAddress::from_str("0x62310ee294108c13f3496ce6895f12f3c2cf3994c74c2911501535e23ccc74ff",).unwrap()),
             coin_type: TypeTag::from_str("0x2::sui::SUI").unwrap(),
@@ -341,18 +341,16 @@ mod tests {
             TransferEvent {
                 amount: BigDecimal::from(2095504),
                 token: TypeTag::from_str("0x2::sui::SUI").unwrap(),
-                sender: "0x62310ee294108c13f3496ce6895f12f3c2cf3994c74c2911501535e23ccc74ff"
-                    .to_string(),
-                receiver: "0x62310ee294108c13f3496ce6895f12f3c2cf3994c74c2911501535e23ccc74ff"
-                    .to_string(),
+                sender: "0x62310ee294108c13f3496ce6895f12f3c2cf3994c74c2911501535e23ccc74ff".to_string(),
+                receiver: "0x62310ee294108c13f3496ce6895f12f3c2cf3994c74c2911501535e23ccc74ff".to_string(),
                 timestamp_ms: 0,
             }
         );
     }
 
     #[test]
+    #[rustfmt::skip]
     fn test_decode_transfer_sui() {
-        #[rustfmt::skip]
         let balance_changes = vec![
             BalanceChange {
                 owner: Owner::AddressOwner(SuiAddress::from_str("0x62310ee294108c13f3496ce6895f12f3c2cf3994c74c2911501535e23ccc74ff").unwrap()),
@@ -365,9 +363,21 @@ mod tests {
                 amount: "12004000000000".parse::<i128>().unwrap(),
             },
         ];
+
+        assert_eq!(
+            decode_transfer(balance_changes).unwrap(),
+            TransferEvent {
+                sender: "0x62310ee294108c13f3496ce6895f12f3c2cf3994c74c2911501535e23ccc74ff".to_string(),
+                receiver: "0xf261e0419966da973b7964a293fc4fe592727df803b4339ee5460f98e9537946".to_string(),
+                amount: BigDecimal::from(12004000000000i128),
+                token: TypeTag::from_str("0x2::sui::SUI").unwrap(),
+                timestamp_ms: 0,
+            }
+        )
     }
 
     #[test]
+    #[rustfmt::skip]
     fn test_decode_transfer_coins() {
         let balance_changes = vec![
             BalanceChange{
@@ -386,5 +396,16 @@ mod tests {
                 amount: "65403000000".parse::<i128>().unwrap(),
             },
         ];
+
+        assert_eq!(
+            decode_transfer(balance_changes).unwrap(),
+            TransferEvent {
+                sender: "0x62310ee294108c13f3496ce6895f12f3c2cf3994c74c2911501535e23ccc74ff".to_string(),
+                receiver: "0xef6bb8190f8caaa2e67ac0d91389777b0a0c6a7d0feddfcbfc72f40343fb522b".to_string(),
+                amount: BigDecimal::from(65403000000i128),
+                token: TypeTag::from_str("0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC").unwrap(),
+                timestamp_ms: 0,
+            }
+        )
     }
 }
