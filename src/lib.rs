@@ -1,30 +1,19 @@
 pub mod fetcher;
+pub mod transfer;
 
 use anyhow::{Context, Result};
-use bigdecimal::{BigDecimal, Zero};
-use binance_async::ws_streams::stream_events;
-use futures::{
-    future,
-    stream::{Stream, StreamExt},
-};
+use bigdecimal::BigDecimal;
+use futures::{future, stream::StreamExt};
 use mini_macro::here;
-use serde::{Deserialize, Serialize};
-use std::io::prelude::*;
-use std::option;
 use std::str::FromStr;
-use std::{collections::HashMap, fs::OpenOptions, sync::Arc};
 use sui_sdk::{
     SuiClient, SuiClientBuilder,
     rpc_types::{
-        BalanceChange, SuiExecutionStatus, SuiTransactionBlockEffects,
-        SuiTransactionBlockEffectsAPI, SuiTransactionBlockResponse,
+        SuiTransactionBlockEffects, SuiTransactionBlockEffectsAPI, SuiTransactionBlockResponse,
         SuiTransactionBlockResponseOptions, SuiTransactionBlockResponseQuery, TransactionFilter,
     },
-    types::digests::TransactionDigest,
 };
-use sui_types::TypeTag;
 use sui_types::base_types::SuiAddress;
-use tracing::instrument::WithSubscriber;
 
 pub struct Fetcher {
     sui_client: SuiClient,
