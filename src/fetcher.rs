@@ -18,10 +18,17 @@ pub struct Fetcher {
     sui_client: SuiClient,
     who: SuiAddress,
     old_first: bool,
+    from: Option<i64>,
+    to: Option<i64>,
 }
 
 impl Fetcher {
-    pub async fn new_mainnet(who: &str, old_first: bool) -> Result<Self> {
+    pub async fn new_mainnet(
+        who: &str,
+        old_first: bool,
+        from: Option<i64>,
+        to: Option<i64>,
+    ) -> Result<Self> {
         let sui_client = SuiClientBuilder::default()
             .build_mainnet()
             .await
@@ -31,6 +38,8 @@ impl Fetcher {
             sui_client,
             who: SuiAddress::from_str(who).context(h!())?,
             old_first,
+            from,
+            to,
         })
     }
 
@@ -54,7 +63,7 @@ impl Fetcher {
                 .get_transactions_stream(filter, None, descending_order);
 
         txs.for_each(|tx_resp| {
-            Self::log_sui_tx_resp(tx_resp);
+            self.log_sui_tx_resp(tx_resp);
             future::ready(())
         })
         .await;
@@ -72,13 +81,26 @@ impl Fetcher {
     }
 
     // TODO: 允许用户自己注册解码代码！
-    fn log_sui_tx_resp(tx_resp: SuiTransactionBlockResponse) {
+    fn log_sui_tx_resp(&self, tx_resp: SuiTransactionBlockResponse) {
+        if let Some(from) = self.from {
+            if tx_resp.timestamp_ms.unwrap() / 1000 < from as u64 {
+                return;
+            }
+        }
+        if let Some(to) = self.to {
+            if tx_resp.timestamp_ms.unwrap() / 1000 > to as u64 {
+                return;
+            }
+        }
+
         if Self::is_err(&tx_resp).unwrap() {
             return;
         }
 
         match Self::decode_tx_type(tx_resp.clone()) {
-            Ok(res) => tracing::info!("{}", serde_json::to_string(&res).unwrap()),
+            Ok(res) => {
+                tracing::info!("{}", serde_json::to_string(&res).unwrap())
+            }
             Err(e) => tracing::error!("Failed to decode tx. Err: {:?}", e),
         };
     }
@@ -98,6 +120,7 @@ impl Fetcher {
             }
         }
 
+        tracing::debug!("{}", serde_json::to_string(&tx_resp).unwrap());
         for event in &events.data {
             if event.type_.to_string()
                 == "0x1eabed72c53feb3805120a081dc15963c204dc8d091542592abaf7a35689b2fb::pool::SwapEvent"
@@ -143,6 +166,18 @@ impl Fetcher {
                         .parse::<i128>()?,
                     in_token,
                     out_token,
+                    before_sqrt_price: _e
+                        .get("before_sqrt_price")
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_string(),
+                    after_sqrt_price: _e
+                        .get("after_sqrt_price")
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_string(),
                 }));
             } else if event.type_.to_string()
                 == "0x3492c874c1e3b3e2984e8c41b589e642d4d0a5d6459e5a9cfc2d52fd7c89c267::events::AssetSwap"
@@ -187,6 +222,18 @@ impl Fetcher {
                         .parse::<i128>()?,
                     in_token,
                     out_token,
+                    before_sqrt_price: _e
+                        .get("before_sqrt_price")
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_string(),
+                    after_sqrt_price: _e
+                        .get("after_sqrt_price")
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .to_string(),
                 }));
             } else {
                 println!("### txs: {}", serde_json::to_string(&tx_resp).unwrap());

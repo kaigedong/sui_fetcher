@@ -23,6 +23,8 @@ pub struct Swap {
     pub out_amount: i128,
     pub in_token: String,
     pub out_token: String,
+    pub before_sqrt_price: String,
+    pub after_sqrt_price: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +54,8 @@ mod tests {
         let fetcher = Fetcher::new_mainnet(
             "0x62310ee294108c13f3496ce6895f12f3c2cf3994c74c2911501535e23ccc74ff",
             false,
+            Some(0),
+            Some(0),
         )
         .await
         .unwrap();
