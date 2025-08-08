@@ -1,5 +1,6 @@
 pub mod errors;
 pub mod fetcher;
+pub mod objects;
 pub mod transfer;
 
 use serde::{Deserialize, Serialize};
@@ -38,7 +39,7 @@ pub enum Dex {
 mod tests {
     use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-    use super::fetcher::Fetcher;
+    use super::fetcher::ActivityFetcher;
 
     #[tokio::test]
     async fn test_log_sui_tx_resp() {
@@ -51,15 +52,15 @@ mod tests {
             .with(tracing_subscriber::filter::LevelFilter::INFO)
             .init();
 
-        let fetcher = Fetcher::new_mainnet(
+        let fetcher = ActivityFetcher::new_mainnet(
             "0x62310ee294108c13f3496ce6895f12f3c2cf3994c74c2911501535e23ccc74ff",
             false,
-            Some(0),
-            Some(0),
+            Some(1751968800),
+            Some(1754647200),
         )
         .await
         .unwrap();
 
-        fetcher.fetch_txs(true).await.unwrap();
+        fetcher.fetch_txs(false).await.unwrap();
     }
 }

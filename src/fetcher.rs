@@ -14,7 +14,7 @@ use sui_types::base_types::SuiAddress;
 
 use crate::{Dex, Swap, TxType, errors::DecodeError, transfer};
 
-pub struct Fetcher {
+pub struct ActivityFetcher {
     sui_client: SuiClient,
     who: SuiAddress,
     old_first: bool,
@@ -22,7 +22,7 @@ pub struct Fetcher {
     to: Option<i64>,
 }
 
-impl Fetcher {
+impl ActivityFetcher {
     pub async fn new_mainnet(
         who: &str,
         old_first: bool,
@@ -97,21 +97,26 @@ impl Fetcher {
             return;
         }
 
-        match Self::decode_tx_type(tx_resp.clone()) {
+        match self.decode_tx_type(tx_resp.clone()) {
             Ok(res) => {
                 tracing::info!("{}", serde_json::to_string(&res).unwrap())
             }
-            Err(e) => tracing::error!("Failed to decode tx. Err: {:?}", e),
+            Err(e) => tracing::error!(
+                "Failed to decode tx. Err: {:?}. context: {}",
+                e,
+                serde_json::to_string(&tx_resp).unwrap()
+            ),
         };
     }
 
-    fn decode_tx_type(tx_resp: SuiTransactionBlockResponse) -> Result<TxType> {
+    fn decode_tx_type(&self, tx_resp: SuiTransactionBlockResponse) -> Result<TxType> {
         tracing::info!("{}", tx_resp.timestamp_ms.context(h!())?);
 
         let events = tx_resp.events.as_ref().context(h!())?;
         if events.data.is_empty() {
             let balance_changes = tx_resp.balance_changes.unwrap();
-            let transfer_event = transfer::decode_transfer(balance_changes).context(h!())?;
+            let transfer_event =
+                transfer::decode_transfer(balance_changes, Some(self.who)).context(h!())?;
 
             if transfer_event.sender.eq(&transfer_event.receiver) {
                 return Ok(TxType::SelfTransfer(transfer_event));
