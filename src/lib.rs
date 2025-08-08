@@ -1,7 +1,8 @@
+pub mod errors;
 pub mod fetcher;
 pub mod transfer;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use bigdecimal::BigDecimal;
 use futures::{future, stream::StreamExt};
 use mini_macro::here;
@@ -15,20 +16,22 @@ use sui_sdk::{
 };
 use sui_types::base_types::SuiAddress;
 
+use crate::{errors::DecodeError, transfer::TransferEvent};
+
 pub struct Fetcher {
     sui_client: SuiClient,
     who: SuiAddress,
+    old_first: bool,
 }
 
 impl Fetcher {
-    pub async fn new_mainnet(who: &str) -> Result<Self> {
-        println!("### a");
+    pub async fn new_mainnet(who: &str, old_first: bool) -> Result<Self> {
         let sui_client = SuiClientBuilder::default().build_mainnet().await?;
 
-        println!("### b");
         Ok(Self {
             sui_client,
             who: SuiAddress::from_str(who).context(here!())?,
+            old_first,
         })
     }
 
@@ -36,21 +39,17 @@ impl Fetcher {
         let tx_filter_from = TransactionFilter::FromAddress(self.who);
         let tx_filter_to = TransactionFilter::ToAddress(self.who);
 
-        let options = SuiTransactionBlockResponseOptions {
-            show_input: false,
-            show_raw_input: false,
-            show_effects: true,
-            show_events: true,
-            show_object_changes: false,
-            show_balance_changes: true,
-            show_raw_effects: false,
-        };
+        let options = SuiTransactionBlockResponseOptions::default()
+            .with_effects()
+            .with_events()
+            .with_balance_changes();
         let filter = SuiTransactionBlockResponseQuery::new(Some(tx_filter_from), Some(options));
 
-        let txs = self
-            .sui_client
-            .read_api()
-            .get_transactions_stream(filter, None, false); // Old first
+        let descending_order = if self.old_first { false } else { true };
+        let txs =
+            self.sui_client
+                .read_api()
+                .get_transactions_stream(filter, None, descending_order);
 
         txs.for_each(|tx_resp| {
             // println!("{:?}", tx_resp);
@@ -63,56 +62,154 @@ impl Fetcher {
         Ok(())
     }
 
+    fn is_err(tx_resp: &SuiTransactionBlockResponse) -> Result<bool> {
+        let res = tx_resp
+            .effects
+            .as_ref()
+            .map(|e| e.status().is_err())
+            .ok_or(DecodeError::TransactionResponseWithoutEffects)?;
+        Ok(res)
+    }
+
     fn log_sui_tx_resp(tx_resp: SuiTransactionBlockResponse) {
-        let effects = &tx_resp.effects.as_ref().unwrap();
-        let status = &effects.status();
-        if status.is_err() {
+        if Self::is_err(&tx_resp).unwrap() {
             return;
         }
 
-        let events = tx_resp.events.as_ref().unwrap();
-        if events.data.is_empty() {
-            // 这是transfer交易!
-            println!("{}", serde_json::to_string(&tx_resp).unwrap());
-        } else {
-            // 这是dex交易！
-            todo!()
-        }
+        Self::decode_tx_type(tx_resp.clone()).unwrap();
 
-        let balance_changes = tx_resp.balance_changes.unwrap();
+        // let events = tx_resp.events.as_ref().unwrap();
+        // if events.data.is_empty() {
+        //     // 这是transfer交易!
+        //     println!("{}", serde_json::to_string(&tx_resp).unwrap());
+        // } else {
+        //     // 这是dex交易！
+        //     todo!()
+        // }
+
+        // let balance_changes = tx_resp.balance_changes.unwrap();
     }
 
-    // pub async fn get_swap_events_after(self, after_time_ms: u64) -> Result<()> {
-    //     // let user = SuiAddress::from_str(self.).unwrap();
+    // TODO: 允许用户自己注册解码代码！
+    fn decode_tx_type(tx_resp: SuiTransactionBlockResponse) -> Result<TxType> {
+        tracing::info!("{}", tx_resp.timestamp_ms.unwrap());
 
-    //     let filter_from = TransactionFilter::FromAddress(self.who);
-    //     let filter_to = TransactionFilter::ToAddress(self.who);
-    //     let mut from_events = fetcher::get_latest_txs(&self, filter_from)
-    //         .await
-    //         .context(here!())?;
-    //     let to_events = get_txs::get_latest_txs(app.clone(), filter_to)
-    //         .await
-    //         .context(here!())?;
+        let events = tx_resp.events.as_ref().unwrap();
+        if events.data.is_empty() {
+            let balance_changes = tx_resp.balance_changes.unwrap();
+            let transfer_event = transfer::decode_transfer(balance_changes).context(here!())?;
 
-    //     from_events.extend(to_events);
-    //     from_events.sort_by_key(|e| e.event_ms());
-    //     from_events.retain(|e| e.event_ms() > after_time_ms);
-    //     if let Some(last_event) = from_events.last().cloned() {
-    //         from_events.retain(|e| e.event_ms() < last_event.event_ms());
-    //     }
+            println!("#### transfer...");
 
-    //     // TODO: merge events
-    //     let mut merge_events: HashMap<u64, Vec<MonitorEvent>> = HashMap::new();
-    //     for event in from_events {
-    //         merge_events
-    //             .entry(event.event_ms())
-    //             .and_modify(|v| v.push(event.clone()))
-    //             .or_insert(vec![event]);
-    //     }
-    //     let merged_events: Vec<_> = merge_events.into_iter().collect();
+            if transfer_event.sender.eq(&transfer_event.receiver) {
+                return Ok(TxType::SelfTransfer(transfer_event));
+            }
+            return Ok(TxType::Transfer(transfer_event));
+        }
 
-    //     Ok(merged_events)
-    // }
+        for event in &events.data {
+            if event.type_.to_string()
+                == "0x1eabed72c53feb3805120a081dc15963c204dc8d091542592abaf7a35689b2fb::pool::SwapEvent"
+            {
+                println!("CetusSwap");
+
+                let balance_changes = tx_resp.balance_changes.as_ref().unwrap();
+
+                assert!(
+                    balance_changes.len() == 2,
+                    "{}",
+                    serde_json::to_string(&tx_resp).unwrap()
+                );
+                let asset1_amount = balance_changes[0].amount;
+                let asset2_amount = balance_changes[1].amount;
+                let (in_token, out_token) = if asset1_amount > asset2_amount {
+                    (
+                        balance_changes[1].coin_type.to_string(),
+                        balance_changes[0].coin_type.to_string(),
+                    )
+                } else {
+                    (
+                        balance_changes[0].coin_type.to_string(),
+                        balance_changes[1].coin_type.to_string(),
+                    )
+                };
+
+                let _e = &event.parsed_json;
+                return Ok(TxType::Swap(Swap {
+                    pool: _e.get("pool").unwrap().as_str().unwrap().to_string(),
+                    dex: Dex::Cetus,
+                    a2b: event.parsed_json.get("atob").unwrap().as_bool().unwrap(),
+                    in_amount: _e
+                        .get("amount_in")
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .parse::<i128>()
+                        .unwrap(),
+                    out_amount: _e
+                        .get("amount_out")
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .parse::<i128>()?,
+                    in_token,
+                    out_token,
+                }));
+            } else if event.type_.to_string()
+                == "0x3492c874c1e3b3e2984e8c41b589e642d4d0a5d6459e5a9cfc2d52fd7c89c267::events::AssetSwap"
+            {
+                println!("BluefinSwap");
+
+                let balance_changes = tx_resp.balance_changes.as_ref().unwrap();
+                assert!(
+                    balance_changes.len() == 2,
+                    "{}",
+                    serde_json::to_string(&tx_resp).unwrap()
+                );
+                let asset1_amount = balance_changes[0].amount;
+                let asset2_amount = balance_changes[1].amount;
+                let (in_token, out_token) = if asset1_amount > asset2_amount {
+                    (
+                        balance_changes[1].coin_type.to_string(),
+                        balance_changes[0].coin_type.to_string(),
+                    )
+                } else {
+                    (
+                        balance_changes[0].coin_type.to_string(),
+                        balance_changes[1].coin_type.to_string(),
+                    )
+                };
+
+                let _e = &event.parsed_json;
+                return Ok(TxType::Swap(Swap {
+                    pool: _e.get("pool_id").unwrap().as_str().unwrap().to_string(),
+                    dex: Dex::Bluefin,
+                    a2b: event.parsed_json.get("a2b").unwrap().as_bool().unwrap(),
+                    in_amount: _e
+                        .get("amount_in")
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .parse::<i128>()
+                        .unwrap(),
+                    out_amount: _e
+                        .get("amount_out")
+                        .unwrap()
+                        .as_str()
+                        .unwrap()
+                        .parse::<i128>()?,
+                    in_token,
+                    out_token,
+                }));
+            } else {
+                println!("### txs: {}", serde_json::to_string(&tx_resp).unwrap());
+            }
+        }
+
+        println!("### txs: {}", serde_json::to_string(&tx_resp).unwrap());
+
+        bail!("Unknown tx type")
+    }
 
     fn tx_gas(effect: SuiTransactionBlockEffects) -> BigDecimal {
         let fee = effect.gas_cost_summary();
@@ -121,14 +218,50 @@ impl Fetcher {
     }
 }
 
+pub enum TxType {
+    Transfer(TransferEvent),
+    SelfTransfer(TransferEvent),
+    Swap(Swap),
+    Unknown,
+}
+
+pub struct Swap {
+    pub pool: String,
+    pub dex: Dex,
+    pub a2b: bool,
+    pub in_amount: i128,
+    pub out_amount: i128,
+    pub in_token: String,
+    pub out_token: String,
+}
+
+enum Dex {
+    Cetus,
+    Magma,
+    Bluefin,
+}
+
 #[cfg(test)]
 mod tests {
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
     use crate::Fetcher;
 
     #[tokio::test]
     async fn test_log_sui_tx_resp() {
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_line_number(true)
+                    .with_file(true),
+            )
+            .with(tracing_subscriber::filter::LevelFilter::INFO)
+            .init();
+
+        // tracinglog
         let fetcher = Fetcher::new_mainnet(
             "0x62310ee294108c13f3496ce6895f12f3c2cf3994c74c2911501535e23ccc74ff",
+            false,
         )
         .await
         .unwrap();

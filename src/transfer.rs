@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use sui_sdk::rpc_types::BalanceChange;
 use sui_types::TypeTag;
-use thiserror::Error;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TransferEvent {
@@ -15,18 +14,12 @@ pub struct TransferEvent {
     pub timestamp_ms: i64,
 }
 
-#[derive(Error, Debug)]
-pub enum DecodeError {
-    #[error("TooManyAccountsOFTransferEvents")]
-    TooManyAccount,
-}
-
-pub fn decode_transfer(balance_change: Vec<BalanceChange>) -> Result<TransferEvent> {
+pub fn decode_transfer(balance_changes: Vec<BalanceChange>) -> Result<TransferEvent> {
     // TODO: balance_change maybe equals to 1, which is self_transfer
-    assert!(balance_change.len() >= 1 && balance_change.len() <= 3);
+    assert!(balance_changes.len() >= 1 && balance_changes.len() <= 3);
 
-    if balance_change.len() == 1 {
-        let balance_change = balance_change.first().unwrap();
+    if balance_changes.len() == 1 {
+        let balance_change = balance_changes.first().unwrap();
         return Ok(TransferEvent {
             amount: BigDecimal::from(balance_change.amount).abs(),
             token: balance_change.coin_type.clone(),
@@ -44,10 +37,10 @@ pub fn decode_transfer(balance_change: Vec<BalanceChange>) -> Result<TransferEve
         });
     }
 
-    if balance_change.len() == 2 {
+    if balance_changes.len() == 2 {
         // transfer sui
-        let mut send_changes: Vec<_> = balance_change.iter().filter(|b| b.amount < 0).collect();
-        let mut receive_change: Vec<_> = balance_change.iter().filter(|b| b.amount > 0).collect();
+        let mut send_changes: Vec<_> = balance_changes.iter().filter(|b| b.amount < 0).collect();
+        let mut receive_change: Vec<_> = balance_changes.iter().filter(|b| b.amount > 0).collect();
         let send_changes = send_changes.pop().unwrap();
         let receive_change = receive_change.pop().unwrap();
         assert_eq!(send_changes.coin_type, receive_change.coin_type);
@@ -65,7 +58,7 @@ pub fn decode_transfer(balance_change: Vec<BalanceChange>) -> Result<TransferEve
         })
     } else {
         let mut coin_count = HashMap::new();
-        for c in &balance_change {
+        for c in &balance_changes {
             coin_count
                 .entry(c.coin_type.clone())
                 .and_modify(|v| *v += 1)
@@ -85,7 +78,7 @@ pub fn decode_transfer(balance_change: Vec<BalanceChange>) -> Result<TransferEve
         let mut receiver = String::new();
         let mut token = TypeTag::U128;
 
-        for c in &balance_change {
+        for c in &balance_changes {
             if c.coin_type == send_token {
                 amount = BigDecimal::from(c.amount.abs());
                 if c.amount.is_negative() {
