@@ -12,7 +12,7 @@ use sui_sdk::{
 };
 use sui_types::base_types::SuiAddress;
 
-use crate::{Dex, Swap, TxType, errors::DecodeError, transfer};
+use crate::{Dex, Swap, TransactionKind, TxType, errors::DecodeError, transfer};
 
 pub struct ActivityFetcher {
     sui_client: SuiClient,
@@ -56,7 +56,7 @@ impl ActivityFetcher {
             .with_balance_changes();
         let filter = SuiTransactionBlockResponseQuery::new(Some(filter), Some(options));
 
-        let descending_order = if self.old_first { false } else { true };
+        let descending_order = !self.old_first;
         let txs =
             self.sui_client
                 .read_api()
@@ -109,8 +109,15 @@ impl ActivityFetcher {
         };
     }
 
-    fn decode_tx_type(&self, tx_resp: SuiTransactionBlockResponse) -> Result<TxType> {
-        tracing::info!("{}", tx_resp.timestamp_ms.context(h!())?);
+    fn decode_tx_type(&self, tx_resp: SuiTransactionBlockResponse) -> Result<TransactionKind> {
+        let tx_time = tx_resp.timestamp_ms.context(h!())?;
+        tracing::info!("{}", tx_time);
+
+        let mut tx_kind = TransactionKind {
+            tx_type: TxType::Unknown,
+            tx_hash: tx_resp.digest,
+            event_timestamp_ms: tx_time,
+        };
 
         let events = tx_resp.events.as_ref().context(h!())?;
         if events.data.is_empty() {
@@ -119,9 +126,11 @@ impl ActivityFetcher {
                 transfer::decode_transfer(balance_changes, Some(self.who)).context(h!())?;
 
             if transfer_event.sender.eq(&transfer_event.receiver) {
-                return Ok(TxType::SelfTransfer(transfer_event));
+                tx_kind.tx_type = TxType::SelfTransfer(transfer_event);
+                return Ok(tx_kind);
             } else {
-                return Ok(TxType::Transfer(transfer_event));
+                tx_kind.tx_type = TxType::Transfer(transfer_event);
+                return Ok(tx_kind);
             }
         }
 
@@ -152,7 +161,7 @@ impl ActivityFetcher {
                 };
 
                 let _e = &event.parsed_json;
-                return Ok(TxType::Swap(Swap {
+                let tx_detail = TxType::Swap(Swap {
                     pool: _e.get("pool").unwrap().as_str().unwrap().to_string(),
                     dex: Dex::Cetus,
                     a2b: event.parsed_json.get("atob").unwrap().as_bool().unwrap(),
@@ -183,7 +192,9 @@ impl ActivityFetcher {
                         .as_str()
                         .unwrap()
                         .to_string(),
-                }));
+                });
+                tx_kind.tx_type = tx_detail;
+                return Ok(tx_kind);
             } else if event.type_.to_string()
                 == "0x3492c874c1e3b3e2984e8c41b589e642d4d0a5d6459e5a9cfc2d52fd7c89c267::events::AssetSwap"
             {
@@ -208,7 +219,7 @@ impl ActivityFetcher {
                 };
 
                 let _e = &event.parsed_json;
-                return Ok(TxType::Swap(Swap {
+                let tx_detail = TxType::Swap(Swap {
                     pool: _e.get("pool_id").unwrap().as_str().unwrap().to_string(),
                     dex: Dex::Bluefin,
                     a2b: event.parsed_json.get("a2b").unwrap().as_bool().unwrap(),
@@ -239,7 +250,9 @@ impl ActivityFetcher {
                         .as_str()
                         .unwrap()
                         .to_string(),
-                }));
+                });
+                tx_kind.tx_type = tx_detail;
+                return Ok(tx_kind);
             } else {
                 println!("### txs: {}", serde_json::to_string(&tx_resp).unwrap());
             }

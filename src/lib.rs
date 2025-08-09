@@ -4,8 +4,16 @@ pub mod objects;
 pub mod transfer;
 
 use serde::{Deserialize, Serialize};
+use sui_types::digests::TransactionDigest;
 
 use crate::transfer::TransferEvent;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransactionKind {
+    pub tx_type: TxType,
+    pub tx_hash: TransactionDigest,
+    pub event_timestamp_ms: u64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TxType {

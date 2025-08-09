@@ -9,14 +9,14 @@ use sui_types::{TypeTag, base_types::SuiAddress};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TransferEvent {
     pub amount: BigDecimal,
-    pub token: TypeTag,
+    pub token: String,
     pub sender: String,
     pub receiver: String,
     pub timestamp_ms: i64,
 }
 
 fn transfer_amount(
-    balance_changes: &Vec<BalanceChange>,
+    balance_changes: &[BalanceChange],
     receiver: SuiAddress,
     token: TypeTag,
 ) -> Result<i128> {
@@ -24,7 +24,7 @@ fn transfer_amount(
         .iter()
         .filter(|c| c.owner.get_owner_address().unwrap() == receiver && c.coin_type == token)
         .collect::<Vec<_>>();
-    if receiver_changes.len() == 0 {
+    if receiver_changes.is_empty() {
         bail!("NotFoundOfEmptyChanges")
     }
     if receiver_changes.len() == 1 {
@@ -35,7 +35,6 @@ fn transfer_amount(
             .iter()
             .filter(|c| c.coin_type != sui_addr())
             .collect::<Vec<_>>();
-        if c_except_sui.len() == 0 {}
 
         if c_except_sui.len() != 1 {
             bail!("Unknown transaction with too many transfer")
@@ -50,14 +49,17 @@ fn sui_addr() -> TypeTag {
     TypeTag::from_str("0x2::sui::SUI").unwrap()
 }
 
-fn transfer_token(balance_changes: &Vec<BalanceChange>) -> Result<TypeTag> {
+fn transfer_token(balance_changes: &[BalanceChange]) -> Result<TypeTag> {
+    if balance_changes.len() == 1 {
+        return Ok(balance_changes.first().unwrap().coin_type.clone());
+    }
+
     let sui_addr = TypeTag::from_str("0x2::sui::SUI").context(here!())?;
     let neg_change = balance_changes
         .iter()
         .filter(|c| c.amount < 0)
-        .map(|c| c)
         .collect::<Vec<_>>();
-    if neg_change.len() == 0 {
+    if neg_change.is_empty() {
         return Err(anyhow!("No negative balance changes found"));
     }
     if neg_change.len() == 1 {
@@ -73,30 +75,31 @@ fn transfer_token(balance_changes: &Vec<BalanceChange>) -> Result<TypeTag> {
         }
         return Ok(neg_except_sui.first().unwrap().coin_type.clone());
     }
-    return Err(anyhow!("Unknown transaction with two many token changes"));
+    Err(anyhow!("Unknown transaction with two many token changes"))
 }
 
 fn transfer_from(balance_changes: &Vec<BalanceChange>) -> Option<SuiAddress> {
+    if balance_changes.len() == 1 {
+        return balance_changes.first()?.owner.get_owner_address().ok();
+    }
+
     for c in balance_changes {
         if c.amount.is_negative() {
             return c.owner.get_owner_address().ok();
         }
     }
-    return None;
+    None
 }
 
-fn transfer_to(
-    balance_changes: &Vec<BalanceChange>,
-    transfer_from: SuiAddress,
-) -> Result<SuiAddress> {
-    if balance_changes.len() == 0 {
+fn transfer_to(balance_changes: &[BalanceChange], transfer_from: SuiAddress) -> Result<SuiAddress> {
+    if balance_changes.is_empty() {
         return Err(anyhow!("No balance changes provided"));
     }
     let c_except_from = balance_changes
         .iter()
         .filter(|c| c.owner.get_owner_address().unwrap() != transfer_from)
         .collect::<Vec<_>>();
-    if c_except_from.len() == 0 {
+    if c_except_from.is_empty() {
         return Ok(transfer_from);
     }
     if c_except_from.len() == 1 {
@@ -137,13 +140,13 @@ pub fn decode_transfer(
     let amount =
         transfer_amount(&balance_changes, transfer_to, transfer_token.clone()).context(here!())?;
 
-    return Ok(TransferEvent {
+    Ok(TransferEvent {
         amount: BigDecimal::from(amount),
-        token: transfer_token,
+        token: transfer_token.to_string(),
         sender: transfer_from.to_string(),
         receiver: transfer_to.to_string(),
         timestamp_ms: 0,
-    });
+    })
 }
 
 #[cfg(test)]
@@ -174,9 +177,36 @@ mod tests {
             decode_transfer(balance_changes, user()).unwrap(),
             TransferEvent {
                 amount: BigDecimal::from(2095504),
-                token: TypeTag::from_str("0x2::sui::SUI").unwrap(),
+                token: "0x2::sui::SUI".to_string(),
                 sender: "0x62310ee294108c13f3496ce6895f12f3c2cf3994c74c2911501535e23ccc74ff".to_string(),
                 receiver: "0x62310ee294108c13f3496ce6895f12f3c2cf3994c74c2911501535e23ccc74ff".to_string(),
+                timestamp_ms: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn test_decode_self_transfer2() {
+        // Merge coins: CRNzhTtGj6R7JS1wWfjq5H6Xy84dQTVroDfg2dnp2nSu
+        let balance_changes = r#"
+            [
+                {
+                  "owner": {"AddressOwner": "0x62310ee294108c13f3496ce6895f12f3c2cf3994c74c2911501535e23ccc74ff"},
+                  "coinType": "0x2::sui::SUI",
+                  "amount": "783072"
+                }
+            ]"#;
+
+        let balance_changes: Vec<BalanceChange> = serde_json::from_str(balance_changes).unwrap();
+        assert_eq!(
+            decode_transfer(balance_changes, user()).unwrap(),
+            TransferEvent {
+                sender: "0x62310ee294108c13f3496ce6895f12f3c2cf3994c74c2911501535e23ccc74ff"
+                    .to_string(),
+                receiver: "0x62310ee294108c13f3496ce6895f12f3c2cf3994c74c2911501535e23ccc74ff"
+                    .to_string(),
+                amount: BigDecimal::from(783072i128),
+                token: "0x2::sui::SUI".to_string(),
                 timestamp_ms: 0,
             }
         );
@@ -204,7 +234,7 @@ mod tests {
                 sender: "0x62310ee294108c13f3496ce6895f12f3c2cf3994c74c2911501535e23ccc74ff".to_string(),
                 receiver: "0xf261e0419966da973b7964a293fc4fe592727df803b4339ee5460f98e9537946".to_string(),
                 amount: BigDecimal::from(12004000000000i128),
-                token: TypeTag::from_str("0x2::sui::SUI").unwrap(),
+                token: "0x2::sui::SUI".to_string(),
                 timestamp_ms: 0,
             }
         )
@@ -237,13 +267,12 @@ mod tests {
                 sender: "0x62310ee294108c13f3496ce6895f12f3c2cf3994c74c2911501535e23ccc74ff".to_string(),
                 receiver: "0xef6bb8190f8caaa2e67ac0d91389777b0a0c6a7d0feddfcbfc72f40343fb522b".to_string(),
                 amount: BigDecimal::from(65403000000i128),
-                token: TypeTag::from_str("0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC").unwrap(),
+                token: "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC".to_string(),
                 timestamp_ms: 0,
             }
         )
     }
 
-    // FIXME: 处理sui sponser
     #[test]
     fn test_decode_binance_transfer() {
         let balance_changes = r#"
@@ -287,10 +316,9 @@ mod tests {
                 receiver: "0x62310ee294108c13f3496ce6895f12f3c2cf3994c74c2911501535e23ccc74ff"
                     .to_string(),
                 amount: BigDecimal::from(155567900000i128),
-                token: TypeTag::from_str(
+                token:
                     "0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC"
-                )
-                .unwrap(),
+                        .to_string(),
                 timestamp_ms: 0,
             }
         );
@@ -396,7 +424,7 @@ mod tests {
                 receiver: "0x62310ee294108c13f3496ce6895f12f3c2cf3994c74c2911501535e23ccc74ff"
                     .to_string(),
                 amount: BigDecimal::from(34939940000000i128),
-                token: TypeTag::from_str("0x2::sui::SUI").unwrap(),
+                token: "0x2::sui::SUI".to_string(),
                 timestamp_ms: 0,
             }
         );
